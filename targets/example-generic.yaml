@@ -1,0 +1,20 @@
+name: example-generic-chat
+description: |
+  Template for pointing the tool at an arbitrary HTTP chat endpoint.
+  Copy this file, edit the fields, and export any ${ENV_VARS} referenced
+  in headers before running.
+
+request:
+  method: POST
+  url: https://your-target.example.com/api/chat
+  headers:
+    Authorization: "Bearer ${TARGET_API_KEY}"
+    Content-Type: "application/json"
+  # The body_template is sent as JSON. Two placeholders are substituted:
+  #   "${history}"    → list of {role, content} messages (full conversation)
+  #   "${user_turn}"  → the latest user message as a plain string
+  body_template:
+    messages: "${history}"
+  history_format: openai     # openai | anthropic | plain-latest
+  response_path: "choices.0.message.content"
+  timeout_s: 60

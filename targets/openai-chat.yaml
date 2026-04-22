@@ -1,0 +1,19 @@
+name: openai-chat-gpt4o-mini
+description: |
+  Example target: OpenAI chat-completions endpoint. Set OPENAI_API_KEY in the
+  environment before running. Use for smoke-testing the tool itself, not as
+  the intended target (it's a raw model API, not a deployed application).
+
+request:
+  method: POST
+  url: https://api.openai.com/v1/chat/completions
+  headers:
+    Authorization: "Bearer ${OPENAI_API_KEY}"
+    Content-Type: "application/json"
+  body_template:
+    model: "gpt-4o-mini"
+    messages: "${history}"
+    temperature: 0.7
+  history_format: openai
+  response_path: "choices.0.message.content"
+  timeout_s: 60
