@@ -8,3 +8,9 @@ build/
 .airt/
 *.db
 .env
+reports/
+ORCHESTRATOR_PROMPT.md
+SESSION_LOG.md
+HANDOFF.md
+.claude/
+uv.lock
