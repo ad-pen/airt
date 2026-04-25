@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 from airt import loader
 from airt.adapters.http import HttpAdapter
 from airt.engine import run_chain
-from airt.models import Status
+from airt.models import Payload, Status
 from airt.storage import Storage
 
 app = typer.Typer()
@@ -38,9 +40,28 @@ def _print_session_summary(session) -> None:
             console.print(f"    [red]error:[/red] {t.error}")
 
 
-async def _run_one(target_path: Path, payload_path: Path, db: Path | None) -> None:
+def _apply_transform_to_payload(payload: Payload, transform_name: str) -> Payload:
+    from airt.transforms import apply_transform
+
+    new_turns = [
+        turn.model_copy(update={"user": apply_transform(turn.user, transform_name)})
+        for turn in payload.turns
+    ]
+    return payload.model_copy(update={"turns": new_turns})
+
+
+async def _run_one(
+    target_path: Path,
+    payload_path: Path,
+    db: Path | None,
+    transform: str | None = None,
+    fail_on_success: bool = False,
+) -> None:
     target = loader.load_target(target_path)
     payload = loader.load_payload(payload_path)
+    if transform:
+        payload = _apply_transform_to_payload(payload, transform)
+
     adapter = HttpAdapter(target)
     try:
         session = await run_chain(adapter=adapter, target=target, payload=payload)
@@ -55,24 +76,60 @@ async def _run_one(target_path: Path, payload_path: Path, db: Path | None) -> No
 
     _print_session_summary(session)
 
+    if fail_on_success and session.overall_status == Status.LIKELY_SUCCESS:
+        raise typer.Exit(1)
 
-async def _run_suite(target_path: Path, payloads_dir: Path, db: Path | None) -> None:
+
+async def _run_suite(
+    target_path: Path,
+    payloads_dir: Path,
+    db: Path | None,
+    transform: str | None = None,
+    attack_class: str | None = None,
+    tag: str | None = None,
+    min_severity: str | None = None,
+    fail_on_success: bool = False,
+) -> None:
     target = loader.load_target(target_path)
-    payloads = loader.load_payloads_dir(payloads_dir)
+    payloads = loader.load_payloads_dir(
+        payloads_dir,
+        attack_class=attack_class,
+        tag=tag,
+        min_severity=min_severity,
+    )
     if not payloads:
         console.print(f"[red]No payloads found in {payloads_dir}[/red]")
         raise typer.Exit(1)
 
+    if transform:
+        payloads = [_apply_transform_to_payload(p, transform) for p in payloads]
+
     adapter = HttpAdapter(target)
     storage = Storage(db)
+    any_success = False
+
     try:
-        for p in payloads:
-            session = await run_chain(adapter=adapter, target=target, payload=p)
-            storage.save_session(session)
-            _print_session_summary(session)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running suite...", total=len(payloads))
+            for p in payloads:
+                session = await run_chain(adapter=adapter, target=target, payload=p)
+                storage.save_session(session)
+                if session.overall_status == Status.LIKELY_SUCCESS:
+                    any_success = True
+                progress.advance(task)
     finally:
         await adapter.close()
         storage.close()
+
+    if fail_on_success and any_success:
+        console.print("[bold red]Failing: at least one payload succeeded[/bold red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -86,9 +143,15 @@ def run(
     db: Path | None = typer.Option(
         None, "--db", help="SQLite DB path (default ~/.airt/airt.db)",
     ),
+    transform: Optional[str] = typer.Option(
+        None, "--transform", help="Apply encoding transform to user messages",
+    ),
+    fail_on_success: bool = typer.Option(
+        False, "--fail-on-success", help="Exit 1 if payload succeeds (for CI)",
+    ),
 ) -> None:
     """Run a single payload against a target."""
-    asyncio.run(_run_one(target, payload, db))
+    asyncio.run(_run_one(target, payload, db, transform=transform, fail_on_success=fail_on_success))
 
 
 @app.command("run-suite")
@@ -100,6 +163,30 @@ def run_suite(
         ..., "-d", "--payloads-dir", exists=True, file_okay=False, help="Directory of payload YAMLs",
     ),
     db: Path | None = typer.Option(None, "--db"),
+    transform: Optional[str] = typer.Option(
+        None, "--transform", help="Apply encoding transform to all payloads",
+    ),
+    attack_class: Optional[str] = typer.Option(
+        None, "--attack-class", help="Filter: only run this attack class",
+    ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", help="Filter: only run payloads with this tag",
+    ),
+    min_severity: Optional[str] = typer.Option(
+        None, "--min-severity", help="Filter: minimum severity (info/low/medium/high/critical)",
+    ),
+    fail_on_success: bool = typer.Option(
+        False, "--fail-on-success", help="Exit 1 if any payload succeeds (for CI)",
+    ),
 ) -> None:
     """Run all payloads in a directory against a target."""
-    asyncio.run(_run_suite(target, payloads_dir, db))
+    asyncio.run(
+        _run_suite(
+            target, payloads_dir, db,
+            transform=transform,
+            attack_class=attack_class,
+            tag=tag,
+            min_severity=min_severity,
+            fail_on_success=fail_on_success,
+        )
+    )

@@ -16,14 +16,32 @@ console = Console()
 def report_cmd(
     session_id: str | None = typer.Option(None, "-s", "--session", help="Session ID to report"),
     all_findings: bool = typer.Option(False, "-a", "--all", help="Report all findings"),
-    out: Path | None = typer.Option(None, "-o", "--out", help="Output file path"),
+    out: Path | None = typer.Option(None, "-o", "--out", help="Output file path (.md or .pdf)"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
-    """Export a markdown report for a session or all findings."""
+    """Export a markdown or PDF report for a session or all findings."""
+    is_pdf = out is not None and out.suffix.lower() == ".pdf"
+
+    if is_pdf and not all_findings:
+        console.print("[red]PDF output requires --all/-a flag[/red]")
+        raise typer.Exit(1)
+
     storage = Storage(db)
     try:
         if all_findings:
             findings_list = storage.list_findings()
+            if is_pdf:
+                from airt.pdf_report import render_pdf_report
+
+                sessions_map = {}
+                for f in findings_list:
+                    s = storage.get_session(f.session_id)
+                    if s:
+                        sessions_map[s.id] = s
+                render_pdf_report(findings_list, sessions_map, str(out))
+                console.print(f"[green]wrote PDF report[/green] {out}")
+                return
+
             pairs = []
             for f in findings_list:
                 s = storage.get_session(f.session_id)
