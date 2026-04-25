@@ -53,6 +53,7 @@ async def _run_demo(
     port: int,
     payloads_dir: Path,
     db: Path | None,
+    concurrency: int = 1,
 ) -> None:
     from airt.demo_bot import AcmeBotServer
 
@@ -80,6 +81,11 @@ async def _run_demo(
     adapter = HttpAdapter(target)
     storage = Storage(db)
     counts = {s: 0 for s in Status}
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _run_one(p):
+        async with sem:
+            return await run_chain(adapter=adapter, target=target, payload=p)
 
     try:
         with Progress(
@@ -90,11 +96,20 @@ async def _run_demo(
             console=console,
         ) as progress:
             task = progress.add_task("Running demo...", total=len(payloads))
-            for p in payloads:
-                session = await run_chain(adapter=adapter, target=target, payload=p)
-                storage.save_session(session)
-                counts[session.overall_status] += 1
-                progress.advance(task)
+
+            if concurrency == 1:
+                for p in payloads:
+                    session = await run_chain(adapter=adapter, target=target, payload=p)
+                    storage.save_session(session)
+                    counts[session.overall_status] += 1
+                    progress.advance(task)
+            else:
+                tasks = [asyncio.create_task(_run_one(p)) for p in payloads]
+                for coro in asyncio.as_completed(tasks):
+                    session = await coro
+                    storage.save_session(session)
+                    counts[session.overall_status] += 1
+                    progress.advance(task)
     finally:
         await adapter.close()
         storage.close()
@@ -121,9 +136,14 @@ def demo(
         Path("payloads"), "-d", "--payloads-dir", help="Payload directory"
     ),
     db: Optional[Path] = typer.Option(None, "--db"),
+    concurrency: int = typer.Option(
+        1, "-c", "--concurrency",
+        help="Number of payloads to run concurrently (default: 1)",
+        min=1, max=50,
+    ),
 ) -> None:
     """Run demo attacks against the built-in AcmeBot."""
-    asyncio.run(_run_demo(target, port, payloads_dir, db))
+    asyncio.run(_run_demo(target, port, payloads_dir, db, concurrency=concurrency))
 
 
 # ---------------------------------------------------------------------------

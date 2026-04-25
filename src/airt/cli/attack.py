@@ -86,14 +86,17 @@ async def _run_suite(
     db: Path | None,
     transform: str | None = None,
     attack_class: str | None = None,
+    owasp: str | None = None,
     tag: str | None = None,
     min_severity: str | None = None,
     fail_on_success: bool = False,
+    concurrency: int = 1,
 ) -> None:
     target = loader.load_target(target_path)
     payloads = loader.load_payloads_dir(
         payloads_dir,
         attack_class=attack_class,
+        owasp=owasp,
         tag=tag,
         min_severity=min_severity,
     )
@@ -107,6 +110,11 @@ async def _run_suite(
     adapter = HttpAdapter(target)
     storage = Storage(db)
     any_success = False
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _run_one(p):
+        async with sem:
+            return await run_chain(adapter=adapter, target=target, payload=p)
 
     try:
         with Progress(
@@ -117,12 +125,22 @@ async def _run_suite(
             console=console,
         ) as progress:
             task = progress.add_task("Running suite...", total=len(payloads))
-            for p in payloads:
-                session = await run_chain(adapter=adapter, target=target, payload=p)
-                storage.save_session(session)
-                if session.overall_status == Status.LIKELY_SUCCESS:
-                    any_success = True
-                progress.advance(task)
+
+            if concurrency == 1:
+                for p in payloads:
+                    session = await run_chain(adapter=adapter, target=target, payload=p)
+                    storage.save_session(session)
+                    if session.overall_status == Status.LIKELY_SUCCESS:
+                        any_success = True
+                    progress.advance(task)
+            else:
+                tasks = [asyncio.create_task(_run_one(p)) for p in payloads]
+                for coro in asyncio.as_completed(tasks):
+                    session = await coro
+                    storage.save_session(session)
+                    if session.overall_status == Status.LIKELY_SUCCESS:
+                        any_success = True
+                    progress.advance(task)
     finally:
         await adapter.close()
         storage.close()
@@ -169,6 +187,9 @@ def run_suite(
     attack_class: Optional[str] = typer.Option(
         None, "--attack-class", help="Filter: only run this attack class",
     ),
+    owasp: Optional[str] = typer.Option(
+        None, "--owasp", help="Filter: only run payloads for this OWASP category (e.g. LLM01)",
+    ),
     tag: Optional[str] = typer.Option(
         None, "--tag", help="Filter: only run payloads with this tag",
     ),
@@ -178,6 +199,11 @@ def run_suite(
     fail_on_success: bool = typer.Option(
         False, "--fail-on-success", help="Exit 1 if any payload succeeds (for CI)",
     ),
+    concurrency: int = typer.Option(
+        1, "-c", "--concurrency",
+        help="Number of payloads to run concurrently (default: 1)",
+        min=1, max=50,
+    ),
 ) -> None:
     """Run all payloads in a directory against a target."""
     asyncio.run(
@@ -185,8 +211,10 @@ def run_suite(
             target, payloads_dir, db,
             transform=transform,
             attack_class=attack_class,
+            owasp=owasp,
             tag=tag,
             min_severity=min_severity,
             fail_on_success=fail_on_success,
+            concurrency=concurrency,
         )
     )

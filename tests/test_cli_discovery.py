@@ -234,3 +234,46 @@ def test_coverage_with_payloads(tmp_path):
     assert result.exit_code == 0
     # LLM01 maps to prompt-injection, so Payloads column should be 1
     assert "1" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --owasp filter on list-payloads
+# ---------------------------------------------------------------------------
+
+def test_list_payloads_owasp_filter(tmp_path):
+    """--owasp filter returns only payloads matching the OWASP category."""
+    p1 = tmp_path / "pi.yaml"
+    p1.write_text(
+        "id: pi-001\nattack_class: prompt-injection\ntitle: PI\n"
+        "owasp: LLM01\n"
+        "turns:\n  - user: hi\n"
+    )
+    p2 = tmp_path / "de.yaml"
+    p2.write_text(
+        "id: de-001\nattack_class: data-extraction\ntitle: DE\n"
+        "owasp: LLM06\n"
+        "turns:\n  - user: hi\n"
+    )
+    result = runner.invoke(
+        discovery_app,
+        ["list-payloads", "-d", str(tmp_path), "--owasp", "LLM01"],
+    )
+    assert result.exit_code == 0
+    assert "pi-001" in result.output
+    assert "de-001" not in result.output
+
+
+def test_list_payloads_owasp_filter_no_match(tmp_path):
+    """--owasp filter with no matching payloads returns 0 payloads."""
+    p1 = tmp_path / "pi.yaml"
+    p1.write_text(
+        "id: pi-001\nattack_class: prompt-injection\ntitle: PI\n"
+        "owasp: LLM01\n"
+        "turns:\n  - user: hi\n"
+    )
+    result = runner.invoke(
+        discovery_app,
+        ["list-payloads", "-d", str(tmp_path), "--owasp", "LLM10"],
+    )
+    assert result.exit_code == 0
+    assert "0 payloads" in result.output

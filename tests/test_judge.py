@@ -323,3 +323,86 @@ async def test_close_does_not_close_injected_client():
     await judge.close()
     # Client should still be usable — not closed by judge
     assert not client.is_closed
+
+
+# ---------------------------------------------------------------------------
+# CLI tests
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone
+from typer.testing import CliRunner
+from airt.models import AttackClass, SessionResult, Status, TurnResult
+
+runner = CliRunner()
+
+
+def _make_session(payload_id: str, status: Status, assistant: str = "response") -> SessionResult:
+    return SessionResult(
+        id=f"sess-{payload_id}",
+        target_name="test",
+        payload_id=payload_id,
+        payload_title=f"Test: {payload_id}",
+        attack_class=AttackClass.PROMPT_INJECTION,
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        overall_status=status,
+        turns=[TurnResult(idx=0, user="attack prompt", assistant=assistant)],
+    )
+
+
+def test_judge_cli_help():
+    from airt.cli import app
+    result = runner.invoke(app, ["judge", "--help"])
+    assert result.exit_code == 0
+    assert "triage" in result.output.lower()
+
+
+def test_judge_cli_no_sessions(tmp_path):
+    from airt.cli import app
+    from airt.storage import Storage
+
+    db = tmp_path / "empty.db"
+    storage = Storage(db)
+    storage.close()
+
+    result = runner.invoke(app, [
+        "judge", "--api-base", "http://localhost:9999",
+        "--model", "test", "--db", str(db),
+    ])
+    assert result.exit_code == 0
+    assert "No sessions" in result.output
+
+
+def test_judge_cli_session_not_found(tmp_path):
+    from airt.cli import app
+    from airt.storage import Storage
+
+    db = tmp_path / "empty.db"
+    storage = Storage(db)
+    storage.close()
+
+    result = runner.invoke(app, [
+        "judge", "nonexistent", "--api-base", "http://localhost:9999",
+        "--model", "test", "--db", str(db),
+    ])
+    assert result.exit_code == 1
+
+
+def test_judge_cli_filters_by_status(tmp_path):
+    from airt.cli import app
+    from airt.storage import Storage
+
+    db = tmp_path / "judge.db"
+    storage = Storage(db)
+    storage.save_session(_make_session("p1", Status.FLAGS_PRESENT))
+    storage.save_session(_make_session("p2", Status.DEFLECTED))
+    storage.save_session(_make_session("p3", Status.LIKELY_SUCCESS))
+    storage.close()
+
+    result = runner.invoke(app, [
+        "judge", "--status", "deflected",
+        "--api-base", "http://127.0.0.1:1",
+        "--model", "test", "--db", str(db),
+    ])
+    assert result.exit_code == 0
+    assert "1" in result.output

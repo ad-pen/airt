@@ -134,4 +134,5 @@ def test_version_command():
 
     result = runner.invoke(main_app, ["version"])
     assert result.exit_code == 0
-    assert "airt 0.2.0" in result.output
+    from airt import __version__
+    assert f"airt {__version__}" in result.output

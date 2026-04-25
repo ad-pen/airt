@@ -52,10 +52,12 @@ async def _run_scan(
     payloads_dir: Path | None,
     db: Path | None,
     attack_class: str | None,
+    owasp: str | None,
     tag: str | None,
     min_severity: str | None,
     fail_on_success: bool,
     output: Path | None,
+    concurrency: int = 1,
 ) -> None:
     target = build_target(url, preset=preset, api_key=api_key, model=model)
 
@@ -69,6 +71,7 @@ async def _run_scan(
     payloads = loader.load_payloads_dir(
         pdir,
         attack_class=attack_class,
+        owasp=owasp,
         tag=tag,
         min_severity=min_severity,
     )
@@ -83,6 +86,12 @@ async def _run_scan(
     counts: dict[Status, int] = {s: 0 for s in Status}
     results = []
 
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _run_one(p):
+        async with sem:
+            return await run_chain(adapter=adapter, target=target, payload=p)
+
     try:
         with Progress(
             SpinnerColumn(),
@@ -92,12 +101,22 @@ async def _run_scan(
             console=console,
         ) as progress:
             task = progress.add_task("Scanning...", total=len(payloads))
-            for p in payloads:
-                session = await run_chain(adapter=adapter, target=target, payload=p)
-                storage.save_session(session)
-                counts[session.overall_status] += 1
-                results.append(session)
-                progress.advance(task)
+
+            if concurrency == 1:
+                for p in payloads:
+                    session = await run_chain(adapter=adapter, target=target, payload=p)
+                    storage.save_session(session)
+                    counts[session.overall_status] += 1
+                    results.append(session)
+                    progress.advance(task)
+            else:
+                tasks = [asyncio.create_task(_run_one(p)) for p in payloads]
+                for coro in asyncio.as_completed(tasks):
+                    session = await coro
+                    storage.save_session(session)
+                    counts[session.overall_status] += 1
+                    results.append(session)
+                    progress.advance(task)
     finally:
         await adapter.close()
         storage.close()
@@ -204,6 +223,10 @@ def scan(
         None, "--attack-class",
         help="Filter: only run this attack class",
     ),
+    owasp: Optional[str] = typer.Option(
+        None, "--owasp",
+        help="Filter: only run payloads for this OWASP category (e.g. LLM01)",
+    ),
     tag: Optional[str] = typer.Option(
         None, "--tag",
         help="Filter: only run payloads with this tag",
@@ -219,6 +242,11 @@ def scan(
     output: Optional[Path] = typer.Option(
         None, "-o", "--output",
         help="Write JSON results to file",
+    ),
+    concurrency: int = typer.Option(
+        1, "-c", "--concurrency",
+        help="Number of payloads to run concurrently (default: 1)",
+        min=1, max=50,
     ),
     list_presets_flag: bool = typer.Option(
         False, "--list-presets",
@@ -243,6 +271,7 @@ def scan(
     asyncio.run(
         _run_scan(
             url, preset, api_key, model, payloads_dir, db,
-            attack_class, tag, min_severity, fail_on_success, output,
+            attack_class, owasp, tag, min_severity, fail_on_success, output,
+            concurrency=concurrency,
         )
     )

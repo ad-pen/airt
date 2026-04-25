@@ -7,6 +7,8 @@ in AI-powered systems. Like Burp Suite, but for AI chatbots and agents.
 - **25 rule-based detectors** — no LLM required to run scans
 - **7 delivery channels** — HTTP, email, poisoned URLs, crafted documents
 - **Report-ready output** — Markdown and PDF, structured for pentest deliverables
+- **Concurrent scanning** — run payloads in parallel with `-c 10`
+- **LLM-as-judge** — automated triage of ambiguous results
 - **Point-and-shoot** — give it a URL, get results
 
 ## Install
@@ -52,6 +54,13 @@ airt scan https://api.openai.com/v1/chat/completions -k $KEY --min-severity high
 
 # Override the model in the request body
 airt scan https://api.openai.com/v1/chat/completions -k $KEY -m gpt-4o-mini
+```
+
+### Concurrent scanning
+
+```bash
+# Run 10 payloads in parallel
+airt scan https://api.openai.com/v1/chat/completions -k $KEY -c 10
 ```
 
 ### CI mode
@@ -300,6 +309,46 @@ recommendation: |
   refusing — add a post-response filter.
 ```
 
+## Regression testing
+
+Compare two scan databases to track security improvements or regressions
+between runs:
+
+```bash
+# Scan before and after a fix
+airt scan https://api.example.com/chat -k $KEY --db baseline.db
+# ... apply fix ...
+airt scan https://api.example.com/chat -k $KEY --db after-fix.db
+
+# Compare
+airt diff baseline.db after-fix.db
+```
+
+Shows regressions (new successes), fixes (previously succeeding payloads
+now deflected), added/removed payloads, and a summary table.
+
+## LLM-as-judge triage
+
+Automatically triage ambiguous scan results using a judge LLM:
+
+```bash
+# Judge all ambiguous sessions (FLAGS_PRESENT + NO_SIGNAL)
+airt judge --api-base https://api.openai.com --model gpt-4o -k $OPENAI_API_KEY
+
+# Judge a specific session
+airt judge sess-abc123 --api-base https://api.openai.com --model gpt-4o -k $KEY
+
+# Only judge sessions with a specific status
+airt judge --status flags-present --api-base https://api.openai.com --model gpt-4o -k $KEY
+
+# Filter by confidence threshold
+airt judge --min-confidence 0.7 --api-base https://api.openai.com --model gpt-4o -k $KEY
+```
+
+The judge evaluates each turn and returns a verdict (success/partial/failure/unclear)
+with a confidence score and reasoning. Use this to filter false positives before
+promoting findings with `airt promote`.
+
 ## All commands
 
 ```
@@ -310,6 +359,8 @@ airt list              List recent sessions
 airt show              Show a session transcript
 airt promote           Promote a session into a confirmed finding
 airt findings          List confirmed findings
+airt diff              Compare two scan databases for regressions/fixes
+airt judge             LLM-as-judge triage of ambiguous results
 airt report            Export a Markdown or PDF report
 airt list-payloads     List available payloads with filtering
 airt list-detectors    List all response detectors
@@ -327,6 +378,20 @@ airt recon             Run reconnaissance probes against a target
 airt fuzz              Apply fuzzing mutations to payload text
 airt version           Print airt version
 ```
+
+## Shell completions
+
+airt supports tab completion for Bash, Zsh, and Fish via Typer:
+
+```bash
+# Install completions for your shell
+airt --install-completion
+
+# Then restart your shell or source the config
+```
+
+After installation, press `<TAB>` to complete command names, options, and
+preset values.
 
 ## Run the tests
 

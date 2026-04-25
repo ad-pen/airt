@@ -30,8 +30,7 @@ def list_payloads(
     attack_class: Optional[str] = typer.Option(
         None, "--class", help="Filter by attack class"
     ),
-    # TODO: implement --owasp filter once loader supports it properly
-    owasp: Optional[str] = typer.Option(None, "--owasp", help="Filter by OWASP category (not yet implemented)"),
+    owasp: Optional[str] = typer.Option(None, "--owasp", help="Filter by OWASP category (e.g. LLM01, LLM06)"),
     tag: Optional[str] = typer.Option(None, "--tag", help="Filter by tag"),
     severity: Optional[str] = typer.Option(None, "--severity", help="Filter by exact severity level"),
     min_severity: Optional[str] = typer.Option(None, "--min-severity", help="Filter by minimum severity level"),
@@ -41,7 +40,7 @@ def list_payloads(
         payloads = _loader.load_payloads_dir(
             payloads_dir,
             attack_class=attack_class,
-            # TODO: pass owasp filter when it is implemented in loader
+            owasp=owasp,
             tag=tag,
             severity=severity,
             min_severity=min_severity,
